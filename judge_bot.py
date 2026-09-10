@@ -1,109 +1,105 @@
+import os
+import discord
+from discord.ext import commands
 import requests
-from datetime import datetime, timedelta, timezone
 
-WEBHOOK_URL = https://discord.com/api/webhooks/1547457299872874567/-SDUm-P51mxiFGDawQvJBC8kcLKKlJ9bNgSIM-0HM7Qs2C6KnkUJxTgK4xZM2M9J6LSJ
+TOKEN = os.environ["DISCORD_TOKEN"]
 
 PLAYER_ID = 592450
 
-TW = timezone(timedelta(hours=8))
+intents = discord.Intents.default()
+intents.message_content = True
+
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents
+)
 
 
-def get_schedule(date):
-    url = "https://statsapi.mlb.com/api/v1/schedule"
+def get_judge_stats():
+
+    url = f"https://statsapi.mlb.com/api/v1/people/{PLAYER_ID}/stats"
 
     params = {
-        "sportId": 1,
-        "date": date
+        "stats": "season",
+        "group": "hitting",
+        "season": "2026"
     }
-
-    response = requests.get(url, params=params)
-    response.raise_for_status()
-
-    return response.json()
-
-
-def get_boxscore(game_pk):
-    url = f"https://statsapi.mlb.com/api/v1/game/{game_pk}/boxscore"
 
     response = requests.get(url)
     response.raise_for_status()
 
-    return response.json()
+    data = response.json()
+
+    stats = data["stats"][0]["splits"][0]["stat"]
+
+    return stats
 
 
-def send_discord(message):
-    requests.post(
-        WEBHOOK_URL,
-        json={"content": message}
-    )
+@bot.event
+async def on_ready():
+
+    print(f"登入成功：{bot.user}")
 
 
-today = datetime.now(TW)
-date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+@bot.command()
+async def judge(ctx):
 
-schedule = get_schedule(date)
+    try:
 
-if not schedule.get("dates"):
-    print("昨天沒有比賽")
-    exit()
+        stats = get_judge_stats()
 
-found = False
+        avg = stats.get("avg", "N/A")
+        obp = stats.get("obp", "N/A")
+        slg = stats.get("slg", "N/A")
+        ops = stats.get("ops", "N/A")
 
-for date_data in schedule["dates"]:
-
-    for game in date_data["games"]:
-
-        game_pk = game["gamePk"]
-
-        boxscore = get_boxscore(game_pk)
-
-        players = {}
-
-        players.update(boxscore["teams"]["away"]["players"])
-        players.update(boxscore["teams"]["home"]["players"])
-
-        player_key = f"ID{PLAYER_ID}"
-
-        if player_key not in players:
-            continue
-
-        player = players[player_key]
-
-        stats = player.get("stats", {}).get("batting", {})
-
-        if not stats:
-            continue
-
-        ab = stats.get("atBats", 0)
-        hits = stats.get("hits", 0)
         hr = stats.get("homeRuns", 0)
         rbi = stats.get("rbi", 0)
+        hits = stats.get("hits", 0)
         runs = stats.get("runs", 0)
-        bb = stats.get("baseOnBalls", 0)
-        so = stats.get("strikeOuts", 0)
 
-        message = f"""⚾ **Aaron Judge 今日成績**
+        message = f"""
+⚾ **Aaron Judge｜2026 球季**
 
-📅 {date}
+📊 **打擊成績**
 
-**{ab} AB｜{hits} H｜{hr} HR｜{rbi} RBI**
+AVG：{avg}
+OBP：{obp}
+SLG：{slg}
+OPS：{ops}
 
-得分：{runs}
-保送：{bb}
-三振：{so}
+🔥 HR：{hr}
+💥 RBI：{rbi}
+🎯 H：{hits}
+🏃 R：{runs}
 """
 
-        send_discord(message)
+        await ctx.send(message)
 
-        found = True
+    except Exception as e:
 
-        print("Aaron Judge 成績已發送")
-
-        break
-
-    if found:
-        break
+        await ctx.send(
+            f"❌ 查詢失敗：{e}"
+        )
 
 
-if not found:
-    print("Aaron Judge 昨天沒有出賽")
+@bot.command()
+async def helpjudge(ctx):
+
+    message = """
+⚾ **Aaron Judge Bot**
+
+指令：
+
+`!judge`
+→ 查看 Aaron Judge 2026 球季成績
+
+`!helpjudge`
+→ 顯示指令說明
+"""
+
+    await ctx.send(message)
+
+
+bot.run(TOKEN)
