@@ -1,9 +1,8 @@
 import os
-import json
 import discord
 from discord.ext import commands
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 # ==========================================
 # 基本設定
 # ==========================================
@@ -11,13 +10,8 @@ TOKEN = os.environ["DISCORD_TOKEN"]
 PLAYER_ID = 592450
 YANKEES_ID = 147
 SEASON = 2026
-# 如果之後要自動推播，把你的 Discord 頻道 ID 放這裡
-# 例如：CHANNEL_ID = 123456789012345678
-CHANNEL_ID = None
-# 用來記錄已經推播過的比賽
-LAST_GAME_FILE = "last_game.txt"
 # ==========================================
-# Discord Bot 設定
+# Discord Bot
 # ==========================================
 intents = discord.Intents.default()
 intents.message_content = True
@@ -39,14 +33,16 @@ def mlb_get(url, params=None):
     response.raise_for_status()
     return response.json()
 # ==========================================
-# 找今天 Yankees 的比賽
+# 找「昨天」Yankees 的比賽
 # ==========================================
-def get_today_game():
-    today = datetime.now().strftime("%Y-%m-%d")
+def get_yesterday_game():
+    yesterday = (
+        datetime.now() - timedelta(days=1)
+    ).strftime("%Y-%m-%d")
     url = "https://statsapi.mlb.com/api/v1/schedule"
     params = {
         "sportId": 1,
-        "date": today,
+        "date": yesterday,
         "teamId": YANKEES_ID,
         "hydrate": "linescore"
     }
@@ -62,33 +58,33 @@ def get_today_game():
 # 取得 Box Score
 # ==========================================
 def get_boxscore(game_pk):
-    url = f"https://statsapi.mlb.com/api/v1/game/{game_pk}/boxscore"
+    url = (
+        f"https://statsapi.mlb.com/api/v1/game/"
+        f"{game_pk}/boxscore"
+    )
     return mlb_get(url)
 # ==========================================
-# 從 Box Score 找 Aaron Judge
+# 找 Aaron Judge 的單場成績
 # ==========================================
 def get_judge_game_stats(game):
     game_pk = game["gamePk"]
     data = get_boxscore(game_pk)
     teams = data["teams"]
-    judge_stats = None
-    # 檢查主隊與客隊
+    player_key = f"ID{PLAYER_ID}"
     for side in ["home", "away"]:
         team = teams[side]
         players = team.get("players", {})
-        player_key = f"ID{PLAYER_ID}"
         if player_key in players:
             player = players[player_key]
             stats = player.get("stats", {})
             batting = stats.get("batting")
             if batting:
-                judge_stats = batting
-                break
-    return judge_stats
+                return batting
+    return None
 # ==========================================
-# 格式化單場成績
+# 格式化昨日成績
 # ==========================================
-def format_today_message(game, stats):
+def format_game_message(game, stats):
     home = game["teams"]["home"]["team"]["name"]
     away = game["teams"]["away"]["team"]["name"]
     home_score = game["teams"]["home"].get("score", 0)
@@ -97,18 +93,18 @@ def format_today_message(game, stats):
     game_date = game["officialDate"]
     at_bats = stats.get("atBats", 0)
     hits = stats.get("hits", 0)
+    doubles = stats.get("doubles", 0)
+    triples = stats.get("triples", 0)
     home_runs = stats.get("homeRuns", 0)
     rbi = stats.get("rbi", 0)
     runs = stats.get("runs", 0)
     walks = stats.get("baseOnBalls", 0)
     strikeouts = stats.get("strikeOuts", 0)
-    doubles = stats.get("doubles", 0)
-    triples = stats.get("triples", 0)
     return f"""
 ⚾ **Aaron Judge｜{game_date}**
 🏟️ **{away} {away_score} - {home_score} {home}**
 📌 比賽狀態：{status}
-### 🔥 今日打擊
+### 🔥 昨日打擊成績
 AB：**{at_bats}**
 H：**{hits}**
 2B：**{doubles}**
@@ -118,33 +114,29 @@ RBI：**{rbi}**
 R：**{runs}**
 BB：**{walks}**
 SO：**{strikeouts}**
-🎯 今日表現：
-**{hits}-{at_bats}**
-Game PK：`{game["gamePk"]}`
+🎯 **今日表現：{hits}-{at_bats}**
 """
 # ==========================================
 # !today
+# 現在改成查「昨天」
 # ==========================================
 @bot.command()
 async def today(ctx):
     try:
-        game = get_today_game()
+        game = get_yesterday_game()
         if game is None:
             await ctx.send(
-                "⚾ 今天沒有找到 Yankees 的比賽。"
+                "⚾ 昨天沒有找到 Yankees 的比賽。"
             )
             return
         stats = get_judge_game_stats(game)
         if stats is None:
-            status = game["status"]["detailedState"]
             await ctx.send(
-                f"⚾ 找到 Yankees 比賽！\n"
-                f"目前狀態：{status}\n\n"
-                f"但目前還沒有取得 Aaron Judge 的單場打擊資料。\n"
-                f"如果比賽還沒開始或正在進行，請稍後再輸入 `!today`。"
+                "⚾ 找到昨天 Yankees 的比賽，"
+                "但沒有找到 Aaron Judge 的打擊資料。"
             )
             return
-        message = format_today_message(
+        message = format_game_message(
             game,
             stats
         )
@@ -156,11 +148,15 @@ async def today(ctx):
         )
 # ==========================================
 # !judge
+# 球季累積成績
 # ==========================================
 @bot.command()
 async def judge(ctx):
     try:
-        url = f"https://statsapi.mlb.com/api/v1/people/{PLAYER_ID}/stats"
+        url = (
+            f"https://statsapi.mlb.com/api/v1/"
+            f"people/{PLAYER_ID}/stats"
+        )
         params = {
             "stats": "season",
             "group": "hitting",
@@ -219,14 +215,12 @@ OPS：**{ops}**
 async def helpjudge(ctx):
     message = """
 ⚾ **Aaron Judge Bot**
-📌 指令：
 `!judge`
 → 查看 Aaron Judge 2026 球季累積成績
 `!today`
-→ 查看 Aaron Judge 今天的單場成績
+→ 查看 Aaron Judge 昨天的單場成績
 `!helpjudge`
 → 查看指令說明
-🔥 Bot 可以再加入每日自動推播功能。
 """
     await ctx.send(message)
 # ==========================================
@@ -239,6 +233,6 @@ async def on_ready():
     print("Aaron Judge Bot 已啟動")
     print("=" * 40)
 # ==========================================
-# 啟動
+# 啟動 Bot
 # ==========================================
 bot.run(TOKEN)
